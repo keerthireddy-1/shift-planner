@@ -1,0 +1,6 @@
+{
+  "name": "ShiftMaster",
+  "description": "3D interactive workforce orchestration engine with local rule-based auto-filling and secure identity management.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
