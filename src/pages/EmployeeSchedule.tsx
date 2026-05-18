@@ -1,243 +1,263 @@
 import React, { useState, useEffect } from 'react';
+import { format, startOfWeek, addDays, eachDayOfInterval, isSameDay } from 'date-fns';
 import { useAuth } from '../hooks/useAuth';
-import { 
-  Users, 
-  LayoutDashboard, 
-  Database,
-  CheckCircle2,
-  AlertCircle,
-  Activity,
-  Cpu,
-  Globe
-} from 'lucide-react';
+import { Assignment, ShiftTemplate, User } from '../types';
+import { Clock, Calendar, AlertCircle, Box, Zap, MapPin, X, Send, UserCircle, Umbrella } from 'lucide-react';
+import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '../lib/utils';
-import { motion } from 'motion/react';
+import { INDIAN_HOLIDAYS, getDayInfo } from '../constants';
 
-export function AdminHub() {
+export function EmployeeSchedule() {
   const { user } = useAuth();
-  const [seeding, setSeeding] = useState(false);
-  const [message, setMessage] = useState('');
-  const [dynamicStats, setDynamicStats] = useState<any[]>([]);
+  const [assignments, setAssignments] = useState<Assignment[]>([]);
+  const [templates, setTemplates] = useState<ShiftTemplate[]>([]);
+  const [colleagues, setColleagues] = useState<User[]>([]);
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [selectedAssignment, setSelectedAssignment] = useState<Assignment | null>(null);
+  const [swapForm, setSwapForm] = useState({ toUserId: '', reason: '' });
+  const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
-    const fetchStats = async () => {
+    const fetchData = async () => {
       try {
-        const query = user?.department ? `?department=${user.department}` : '';
-        const [usrRes, asnRes] = await Promise.all([
-          fetch(`/api/users${query}`).then(r => r.json()),
-          fetch(`/api/assignments${query}`).then(r => r.json())
+        const [tplRes, asnRes, userRes] = await Promise.all([
+          fetch('/api/templates').then(r => r.json()),
+          fetch(`/api/assignments?department=${user?.department}`).then(r => r.json()),
+          fetch(`/api/users?department=${user?.department}`).then(r => r.json())
         ]);
-        
-        const stats = usrRes.map((u: any) => {
-          const userAsns = asnRes.filter((a: any) => a.userId === u.id);
-          const hours = userAsns.length * 8;
-          return {
-            id: u.id,
-            name: u.name,
-            dept: u.department,
-            hours,
-            efficiency: Math.min(100, 85 + Math.random() * 15)
-          };
-        });
-        setDynamicStats(stats);
+        setTemplates(tplRes);
+        setAssignments(asnRes.filter((a: Assignment) => a.userId === user?.id));
+        setColleagues(userRes.filter((u: User) => u.id !== user?.id));
       } catch (e) {
         console.error(e);
       }
     };
-    if (user) fetchStats();
+    if (user) fetchData();
   }, [user]);
 
-  const seedData = async () => {
-    setSeeding(true);
+  const handleSwapInit = (assignment: Assignment) => {
+    setSelectedAssignment(assignment);
+    setIsModalOpen(true);
+  };
+
+  const handleSwapSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedAssignment || !swapForm.toUserId) return;
+
+    setSubmitting(true);
     try {
-      const res = await fetch('/api/seed', { method: 'POST' });
-      const data = await res.json();
-      setMessage(data.message);
-    } catch (error: any) {
-      setMessage(`Error: ${error.message}`);
+      const res = await fetch('/api/swaps', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fromUserId: user?.id,
+          toUserId: swapForm.toUserId,
+          assignmentId: selectedAssignment.id,
+          reason: swapForm.reason
+        })
+      });
+      if (res.ok) {
+        setIsModalOpen(false);
+        setSwapForm({ toUserId: '', reason: '' });
+        // Optionally show success toast
+      }
+    } catch (e) {
+      console.error(e);
     } finally {
-      setSeeding(false);
+      setSubmitting(false);
     }
   };
 
-  if (user?.role !== 'admin') return <div className="p-8 text-rose-500 font-black uppercase tracking-widest">Unauthorized Access Detected.</div>;
+  const today = new Date();
+  const start = startOfWeek(today, { weekStartsOn: 1 });
+  const end = addDays(start, 14); // View 2 weeks
+  const days = eachDayOfInterval({ start, end });
 
   return (
     <motion.div 
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
-      className="max-w-6xl mx-auto space-y-10"
+      className="max-w-4xl mx-auto space-y-10"
     >
       <header className="flex justify-between items-end">
         <div>
-          <h1 className="text-5xl font-black tracking-tighter text-white mb-2">SYSTEM <span className="text-indigo-500">CONTROL</span></h1>
-          <p className="text-slate-500 font-mono text-[10px] uppercase tracking-[0.4em]">Infrastructure & AI Parameter Matrix</p>
+          <h1 className="text-5xl font-black tracking-tighter text-white mb-2 uppercase">My <span className="text-indigo-500">Protocol</span></h1>
+          <p className="text-slate-500 font-mono text-[10px] uppercase tracking-[0.4em]">Personal Temporal Allocation Grid</p>
         </div>
-        <div className="flex glass-morphism rounded-2xl p-1 p-1">
-          <button className="px-6 py-2 text-[10px] font-black uppercase tracking-widest text-indigo-400 bg-indigo-500/10 rounded-xl border border-indigo-500/20">Active Node</button>
-          <button className="px-6 py-2 text-[10px] font-black uppercase tracking-widest text-slate-500 hover:text-white transition-colors">Log Stream</button>
+        <div className="flex glass-morphism rounded-2xl p-1">
+          <div className="px-6 py-2 text-[10px] font-black uppercase tracking-widest text-indigo-400 bg-indigo-500/10 rounded-xl border border-indigo-500/20 flex items-center gap-2">
+            <Zap className="w-3 h-3 animate-pulse" /> Live Sync
+          </div>
         </div>
       </header>
 
-      {/* Workforce Analytics - 3D Card */}
-      <section className="glass-morphism rounded-[2.5rem] overflow-hidden shadow-2xl relative">
-        <div className="absolute top-0 right-0 p-8 opacity-10">
-           <Activity className="w-32 h-32 text-indigo-500" />
-        </div>
-        
-        <div className="p-10 border-b border-white/5 flex justify-between items-center relative z-10">
-          <div>
-            <h3 className="text-xl font-black text-white uppercase tracking-tight">Performance Matrix</h3>
-            <p className="text-[10px] text-slate-500 font-black uppercase tracking-widest mt-1">Personnel Output & Temporal Load</p>
-          </div>
-          <div className="flex items-center gap-3">
-             <div className="flex -space-x-2">
-                {[...Array(4)].map((_, i) => (
-                  <div key={i} className="w-8 h-8 rounded-full border-2 border-slate-900 bg-slate-800 flex items-center justify-center text-[8px] font-bold">
-                    {String.fromCharCode(65 + i)}
-                  </div>
-                ))}
-             </div>
-             <span className="text-[10px] font-black px-4 py-1.5 bg-rose-500/10 text-rose-500 rounded-full uppercase tracking-widest border border-rose-500/20">
-               {dynamicStats.filter(s => s.hours > 48).length} Critical Alerts
-             </span>
-          </div>
-        </div>
-        
-        <div className="overflow-x-auto">
-          <table className="w-full text-left">
-            <thead>
-              <tr className="bg-white/5">
-                <th className="px-10 py-5 text-[9px] font-black text-slate-500 uppercase tracking-[0.3em]">Identity</th>
-                <th className="px-10 py-5 text-[9px] font-black text-slate-500 uppercase tracking-[0.3em]">Load Index</th>
-                <th className="px-10 py-5 text-[9px] font-black text-slate-500 uppercase tracking-[0.3em] text-center">Temporal Units</th>
-                <th className="px-10 py-5 text-[9px] font-black text-slate-500 uppercase tracking-[0.3em] text-right">Node Health</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-white/5">
-              {dynamicStats.map(row => (
-                <tr key={row.id} className="hover:bg-white/5 transition-colors group">
-                  <td className="px-10 py-6">
-                    <div className="flex items-center gap-4">
-                      <div className="w-10 h-10 rounded-2xl bg-slate-800 border border-white/5 flex items-center justify-center text-[10px] font-black text-slate-400 group-hover:border-indigo-500/30 transition-colors">
-                        {row.name.charAt(0)}
-                      </div>
-                      <span className="text-sm font-bold text-white tracking-tight">{row.name}</span>
-                    </div>
-                  </td>
-                  <td className="px-10 py-6">
-                     <div className="w-32 h-1.5 bg-slate-900 rounded-full overflow-hidden">
-                        <motion.div 
-                          initial={{ width: 0 }}
-                          animate={{ width: `${(row.hours / 60) * 100}%` }}
-                          className={cn(
-                            "h-full rounded-full",
-                            row.hours > 48 ? "bg-rose-500" : "bg-indigo-500"
-                          )}
-                        />
-                     </div>
-                  </td>
-                  <td className="px-10 py-6 text-center">
-                    <span className={cn(
-                      "text-sm font-black font-mono",
-                      row.hours > 48 ? "text-rose-500" : "text-white"
-                    )}>
-                      {row.hours}.00H
-                    </span>
-                  </td>
-                  <td className="px-10 py-6 text-right">
-                    <div className="inline-flex items-center gap-2 px-3 py-1 bg-white/5 rounded-lg border border-white/5">
-                      <div className={cn("w-1.5 h-1.5 rounded-full", row.efficiency > 90 ? "bg-emerald-500 animate-pulse" : "bg-amber-500")} />
-                      <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">{row.efficiency}% OPTIMAL</span>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </section>
+      <div className="grid gap-6">
+        {days.map(day => {
+          const dateStr = format(day, 'yyyy-MM-dd');
+          const dayAssignments = assignments.filter(a => a.date === dateStr);
+          const isToday = isSameDay(day, today);
+          const dayInfo = getDayInfo(day);
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-        <section className="p-10 glass-morphism rounded-[2.5rem] flex flex-col group relative overflow-hidden">
-          <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-transparent via-indigo-500/50 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
-          
-          <div className="flex items-center gap-6 mb-10">
-            <div className="w-14 h-14 bg-indigo-500/10 text-indigo-500 rounded-2xl flex items-center justify-center border border-indigo-500/20 shadow-lg shadow-indigo-500/10">
-              <Database className="w-7 h-7" />
-            </div>
-            <div>
-              <h3 className="font-black text-white uppercase tracking-wider">Storage Core</h3>
-              <p className="text-[10px] text-slate-500 font-black uppercase tracking-[0.2em] mt-1">Memory Reset & Initialization</p>
-            </div>
-          </div>
-          
-          <button
-            onClick={seedData}
-            disabled={seeding}
-            className="mt-auto w-full py-5 px-8 bg-slate-900 border border-white/5 text-white rounded-[1.5rem] font-black uppercase tracking-[0.3em] text-[10px] hover:bg-white/5 disabled:opacity-50 transition-all flex items-center justify-center gap-4 group/btn"
-          >
-            {seeding ? (
-              <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-            ) : (
-              <>
-                PURGE & REINITIALISE SYSTEM
-                <CheckCircle2 className="w-4 h-4 text-indigo-500 group-hover/btn:scale-125 transition-transform" />
-              </>
-            )}
-          </button>
-          
-          {message && (
+          return (
             <motion.div 
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
+              key={day.toISOString()}
+              initial={{ opacity: 0, x: -20 }}
+              animate={{ opacity: 1, x: 0 }}
               className={cn(
-                "mt-8 p-4 rounded-2xl text-[10px] font-black uppercase tracking-[0.2em] flex items-center gap-4 border",
-                message.startsWith('Error') ? "bg-rose-500/10 text-rose-500 border-rose-500/20" : "bg-emerald-500/10 text-emerald-500 border-emerald-500/20"
+                "glass-morphism rounded-[2rem] p-8 flex items-center justify-between group relative overflow-hidden transition-all",
+                isToday && "border-indigo-500/30 scale-[1.02] shadow-indigo-500/10 shadow-2xl",
+                dayInfo.isNonWorking && "border-amber-500/20 bg-amber-500/[0.02]"
               )}
             >
-              <AlertCircle className="w-4 h-4" />
-              {message}
-            </motion.div>
-          )}
-        </section>
+              {isToday && (
+                <div className="absolute top-0 left-0 w-2 h-full bg-indigo-500" />
+              )}
+              {dayInfo.isNonWorking && (
+                <div className="absolute top-0 right-0 p-4">
+                   <Umbrella className="w-5 h-5 text-amber-500/20" />
+                </div>
+              )}
 
-        <section className="p-10 glass-morphism rounded-[2.5rem] relative group">
-          <div className="flex items-center gap-6 mb-10">
-            <div className="w-14 h-14 bg-emerald-500/10 text-emerald-500 rounded-2xl flex items-center justify-center border border-emerald-500/20 shadow-lg shadow-emerald-500/10">
-              <Cpu className="w-7 h-7" />
-            </div>
-            <div>
-              <h3 className="font-black text-white uppercase tracking-wider">AI Synapse</h3>
-              <p className="text-[10px] text-slate-500 font-black uppercase tracking-[0.2em] mt-1">Local Heuristic Engine Status</p>
-            </div>
-          </div>
-          
-          <div className="space-y-6">
-            <div className="flex justify-between items-center py-4 border-b border-white/5 group-hover:border-indigo-500/20 transition-all">
-              <div className="flex items-center gap-3">
-                 <Globe className="w-4 h-4 text-slate-600" />
-                 <span className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">Node Connectivity</span>
+              <div className="flex items-center gap-10">
+                <div className="text-center min-w-[80px]">
+                  <p className="text-[10px] font-black uppercase tracking-[0.3em] text-slate-600 mb-1">{format(day, 'EEE')}</p>
+                  <p className={cn(
+                    "text-3xl font-black tracking-tighter",
+                    isToday ? "text-indigo-400" : dayInfo.isNonWorking ? "text-amber-500" : "text-white"
+                  )}>{format(day, 'd')}</p>
+                  <p className="text-[9px] font-bold uppercase text-slate-700">{format(day, 'MMM')}</p>
+                </div>
+
+                <div className="h-12 w-[1px] bg-white/5" />
+
+                <div className="space-y-4">
+                  {dayInfo.isNonWorking ? (
+                    <div className="flex items-center gap-3 text-amber-500/70">
+                       <Umbrella className="w-4 h-4" />
+                       <span className="text-[10px] font-black uppercase tracking-[0.4em]">{dayInfo.label}</span>
+                    </div>
+                  ) : dayAssignments.length > 0 ? (
+                    dayAssignments.map(assign => {
+                      const tpl = templates.find(t => t.id === assign.shiftId);
+                      return (
+                        <div key={assign.id} className="flex items-center gap-8">
+                           <div className="flex flex-col">
+                              <span className="text-sm font-black text-white uppercase tracking-tight">{tpl?.name || 'Shift'}</span>
+                              <span className="text-xs font-mono text-slate-500">{tpl?.startTime} — {tpl?.endTime}</span>
+                           </div>
+                           <div className="flex items-center gap-4">
+                              <div className="flex items-center gap-2 px-3 py-1 bg-white/5 rounded-lg border border-white/5">
+                                <Clock className="w-3 h-3 text-slate-600" />
+                                <span className="text-[9px] font-black text-slate-400">8.0H</span>
+                              </div>
+                              <div className="flex items-center gap-2 px-3 py-1 bg-white/5 rounded-lg border border-white/5">
+                                <MapPin className="w-3 h-3 text-slate-600" />
+                                <span className="text-[9px] font-black text-slate-400 uppercase">{user?.department}</span>
+                              </div>
+                           </div>
+                        </div>
+                      );
+                    })
+                  ) : (
+                    <div className="flex items-center gap-3 text-slate-700">
+                       <AlertCircle className="w-4 h-4" />
+                       <span className="text-[10px] font-black uppercase tracking-[0.4em]">Operational Standby (Off)</span>
+                    </div>
+                  )}
+                </div>
               </div>
-              <span className="text-[9px] font-black px-4 py-1 bg-emerald-500/10 text-emerald-500 rounded-full uppercase tracking-widest border border-emerald-500/20">Encrypted</span>
-            </div>
-            <div className="flex justify-between items-center py-4 border-b border-white/5">
-              <div className="flex items-center gap-3">
-                 <Cpu className="w-4 h-4 text-slate-600" />
-                 <span className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">Heuristic Engine</span>
-              </div>
-              <span className="text-[9px] font-black px-4 py-1 bg-emerald-500/10 text-emerald-500 rounded-full uppercase tracking-widest border border-emerald-500/20">Operational</span>
-            </div>
-            <div className="flex justify-between items-center py-4">
-              <div className="flex items-center gap-3">
-                 <Activity className="w-4 h-4 text-slate-600" />
-                 <span className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">Conflict Matrix</span>
-              </div>
-              <span className="text-[9px] font-black px-4 py-1 bg-slate-800 text-slate-500 rounded-full uppercase tracking-widest">Awaiting Command</span>
-            </div>
-          </div>
-        </section>
+
+              {dayAssignments.length > 0 && (
+                <button 
+                  onClick={() => handleSwapInit(dayAssignments[0])}
+                  className="px-6 py-3 bg-slate-900 border border-white/5 text-slate-500 rounded-2xl text-[9px] font-black tracking-widest uppercase hover:text-white hover:border-indigo-500/30 transition-all"
+                >
+                  Swap Request
+                </button>
+              )}
+            </motion.div>
+          );
+        })}
       </div>
+
+      {/* Swap Modal */}
+      <AnimatePresence>
+        {isModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-6">
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setIsModalOpen(false)}
+              className="absolute inset-0 bg-slate-950/80 backdrop-blur-sm"
+            />
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.9, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9, y: 20 }}
+              className="w-full max-w-md glass-morphism rounded-[2.5rem] p-10 relative overflow-hidden"
+            >
+              <button 
+                onClick={() => setIsModalOpen(false)}
+                className="absolute top-8 right-8 text-slate-500 hover:text-white transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+
+              <div className="mb-8">
+                <h3 className="text-3xl font-black tracking-tighter text-white uppercase mb-2">Initialize <span className="text-indigo-400">Swap</span></h3>
+                <p className="text-[10px] font-mono text-slate-500 uppercase tracking-widest">Protocol Reassignment Request</p>
+              </div>
+
+              <form onSubmit={handleSwapSubmit} className="space-y-6">
+                <div className="space-y-2">
+                  <label className="text-[9px] font-black text-slate-500 uppercase tracking-[0.3em] ml-2">Select Target Colleague</label>
+                  <div className="relative">
+                    <UserCircle className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-indigo-400" />
+                    <select
+                      required
+                      className="w-full bg-slate-900/50 border border-white/10 rounded-2xl py-4 pl-12 pr-4 text-xs font-bold text-white uppercase tracking-widest focus:border-indigo-500/50 focus:outline-none transition-colors appearance-none"
+                      value={swapForm.toUserId}
+                      onChange={e => setSwapForm({ ...swapForm, toUserId: e.target.value })}
+                    >
+                      <option value="">Choose Personnel...</option>
+                      {colleagues.map(c => (
+                        <option key={c.id} value={c.id}>{c.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                   <label className="text-[9px] font-black text-slate-500 uppercase tracking-[0.3em] ml-2">Reason for Mutation</label>
+                   <textarea
+                    required
+                    placeholder="Enter justification for temporal shift..."
+                    className="w-full bg-slate-900/50 border border-white/10 rounded-2xl py-4 px-6 text-xs font-bold text-white tracking-widest focus:border-indigo-500/50 focus:outline-none transition-colors min-h-[100px]"
+                    value={swapForm.reason}
+                    onChange={e => setSwapForm({ ...swapForm, reason: e.target.value })}
+                  />
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={submitting || !swapForm.toUserId}
+                  className="w-full bg-indigo-600 hover:bg-indigo-500 text-white rounded-2xl py-5 text-sm font-black uppercase tracking-[0.3em] transition-all transform active:scale-95 shadow-xl shadow-indigo-950/20 disabled:opacity-50 flex items-center justify-center gap-3"
+                >
+                  {submitting ? (
+                    <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                  ) : (
+                    <>
+                      <Send className="w-4 h-4" />
+                      Transmit Request
+                    </>
+                  )}
+                </button>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </motion.div>
   );
 }
