@@ -115,14 +115,16 @@ export default function Swaps() {
     const myAssignmentShiftId = myAssignment.shiftId;
     const myAssignmentDate = myAssignment.date;
 
+    // Strict frontend conflict filter: Check if target coworker works ANY shift on this exact day
     const conflict = allAssignments.find(a =>
       String(a.userId) === String(swapForm.toUserId) &&
-      a.date === myAssignmentDate &&
-      a.shiftId === myAssignmentShiftId
+      a.date === myAssignmentDate
     );
 
     if (conflict) {
-      // Fire-and-forget audit log
+      const colleagueShiftName = templates.find(t => t.id === conflict.shiftId)?.name || 'another';
+
+      // Dispatched background audit trace
       fetch('/api/swaps/rejected-audit', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -132,13 +134,14 @@ export default function Swaps() {
           assignmentId: swapForm.assignmentId,
           date: myAssignmentDate,
           shiftId: myAssignmentShiftId,
-          reason: 'Frontend: same shift and date conflict',
+          reason: `Frontend Error: Target system identity is already assigned to the ${colleagueShiftName} shift.`,
           rejectedAt: new Date().toISOString()
         })
       }).catch(console.error);
 
-      const shiftName = templates.find(t => t.id === myAssignmentShiftId)?.name || 'same';
-      setConflictPopup({ visible: true, shiftName });
+      // Force state setup to trigger popups safely
+      setConflictPopup({ visible: true, shiftName: colleagueShiftName });
+      setSubmitting(false);
       return;
     }
 
@@ -157,9 +160,10 @@ export default function Swaps() {
 
       if (!res.ok) {
         const body = await res.json();
-        // Backend also returned a conflict — show the popup too
         if (res.status === 409) {
-          const shiftName = templates.find(t => t.id === myAssignmentShiftId)?.name || 'same';
+          // If fallback fails or backend catches a race condition conflict
+          const matchedShift = allAssignments.find(a => String(a.userId) === String(swapForm.toUserId) && a.date === myAssignmentDate);
+          const shiftName = templates.find(t => t.id === matchedShift?.shiftId)?.name || 'same';
           setConflictPopup({ visible: true, shiftName });
         } else {
           setError(body.error || 'Failed to submit swap request.');
@@ -344,55 +348,6 @@ export default function Swaps() {
         })}
       </div>
 
-      {/* Conflict popup — renders above the swap modal */}
-      <AnimatePresence>
-        {conflictPopup.visible && (
-          <div className="fixed inset-0 z-[60] flex items-center justify-center p-6">
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              className="absolute inset-0 bg-slate-950/60 backdrop-blur-sm"
-            />
-            <motion.div
-              initial={{ opacity: 0, scale: 0.85, y: 24 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.85, y: 24 }}
-              transition={{ type: 'spring', stiffness: 320, damping: 28 }}
-              className="relative w-full max-w-sm bg-slate-900 border border-rose-500/30 rounded-[2rem] p-10 shadow-2xl shadow-rose-950/40 text-center overflow-hidden"
-            >
-              {/* Glow accent */}
-              <div className="absolute -top-10 left-1/2 -translate-x-1/2 w-40 h-40 bg-rose-500/10 rounded-full blur-3xl pointer-events-none" />
-
-              <div className="w-16 h-16 mx-auto mb-6 rounded-3xl bg-rose-500/10 border border-rose-500/20 flex items-center justify-center shadow-lg shadow-rose-500/10">
-                <AlertTriangle className="w-8 h-8 text-rose-500" />
-              </div>
-
-              <h3 className="text-xl font-black text-white uppercase tracking-tight mb-2">
-                Conflict <span className="text-rose-500">Detected</span>
-              </h3>
-
-              <p className="text-[10px] font-mono text-slate-400 uppercase tracking-[0.25em] mb-6 leading-relaxed">
-                Selected personnel is already assigned to the{' '}
-                <span className="text-rose-400 font-black">{conflictPopup.shiftName}</span>{' '}
-                shift on this date. Choose a different colleague.
-              </p>
-
-              <button
-                onClick={() => {
-                  setConflictPopup({ visible: false, shiftName: '' });
-                  // Reset only the colleague field so they can pick someone else
-                  setSwapForm(f => ({ ...f, toUserId: '' }));
-                }}
-                className="w-full py-4 bg-rose-600 hover:bg-rose-500 text-white rounded-2xl text-[10px] font-black uppercase tracking-[0.3em] transition-all active:scale-95 shadow-lg shadow-rose-950/30"
-              >
-                Choose Different Personnel
-              </button>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
-
       <SwapModal
         isOpen={isModalOpen}
         onClose={() => setIsModalOpen(false)}
@@ -406,6 +361,11 @@ export default function Swaps() {
         currentUserId={user?.id}
         templates={templates}
         error={error}
+        conflictPopup={conflictPopup}
+        onDismissConflict={() => {
+          setConflictPopup({ visible: false, shiftName: '' });
+          setSwapForm(f => ({ ...f, toUserId: '' }));
+        }}
       />
     </motion.div>
   );
@@ -423,125 +383,188 @@ function SwapModal({
   users,
   currentUserId,
   templates,
-  error
+  error,
+  conflictPopup,
+  onDismissConflict
 }: any) {
   const colleagues = users.filter((u: any) => u.id !== currentUserId);
   const availableDates = [...new Set(assignments.map((a: any) => a.date))].sort();
 
   return (
-    <AnimatePresence>
-      {isOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-6">
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            onClick={onClose}
-            className="absolute inset-0 bg-slate-950/80 backdrop-blur-sm"
-          />
-          <motion.div
-            initial={{ opacity: 0, scale: 0.9, y: 20 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.9, y: 20 }}
-            className="w-full max-w-md glass-morphism rounded-[2.5rem] p-10 relative overflow-hidden"
-          >
-            <button
-              onClick={onClose}
-              className="absolute top-8 right-8 text-slate-500 hover:text-white transition-colors"
-            >
-              <X className="w-5 h-5" />
-            </button>
-
-            <div className="mb-8">
-              <h3 className="text-3xl font-black tracking-tighter text-white uppercase mb-2">Request <span className="text-indigo-400">Mutation</span></h3>
-              <p className="text-[10px] font-mono text-slate-500 uppercase tracking-widest">Protocol Reassignment Request</p>
-            </div>
-
-            {error && (
+    <>
+      <AnimatePresence>
+        {conflictPopup?.visible && (
+          <>
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 z-[999] bg-slate-950/75 backdrop-blur-sm"
+            />
+            <div className="fixed inset-0 z-[1000] flex items-center justify-center p-6">
               <motion.div
-                initial={{ opacity: 0, x: -10 }}
-                animate={{ opacity: 1, x: 0 }}
-                className="mb-8 p-4 bg-rose-500/10 border border-rose-500/20 rounded-2xl flex gap-3 text-rose-500 shadow-lg shadow-rose-500/5 items-center"
+                initial={{ opacity: 0, scale: 0.8, y: 32 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.8, y: 32 }}
+                transition={{ type: 'spring', stiffness: 340, damping: 26 }}
+                className="w-full max-w-sm bg-slate-900 border border-rose-500/30 rounded-[2rem] p-10 shadow-2xl shadow-rose-950/50 text-center relative overflow-hidden"
               >
-                <AlertTriangle className="w-5 h-5 flex-shrink-0" />
-                <p className="text-[10px] font-black uppercase tracking-wider leading-relaxed">{error}</p>
-              </motion.div>
-            )}
+                <div className="absolute -top-12 left-1/2 -translate-x-1/2 w-48 h-48 bg-rose-500/10 rounded-full blur-3xl pointer-events-none" />
 
-            <form onSubmit={onSubmit} className="space-y-6">
-              <div className="space-y-2">
-                <label className="text-[9px] font-black text-slate-500 uppercase tracking-[0.3em] ml-2">Select Date to Swap</label>
-                <select
-                  required
-                  className="w-full bg-slate-900/50 border border-white/10 rounded-2xl py-4 px-6 text-xs font-bold text-white uppercase tracking-widest focus:border-indigo-500/50 focus:outline-none transition-colors appearance-none"
-                  value={form.date}
-                  onChange={e => onDateChange(e.target.value)}
+                <div className="w-16 h-16 mx-auto mb-6 rounded-3xl bg-rose-500/10 border border-rose-500/20 flex items-center justify-center shadow-lg shadow-rose-500/10">
+                  <AlertTriangle className="w-8 h-8 text-rose-400" />
+                </div>
+
+                <h3 className="text-xl font-black text-white uppercase tracking-tight mb-3">
+                  Conflict <span className="text-rose-500">Detected</span>
+                </h3>
+
+                <p className="text-[10px] font-mono text-slate-400 uppercase tracking-[0.2em] leading-relaxed mb-8 text-center">
+                  Selected personnel is already assigned to the{' '}
+                  <span className="text-rose-400 font-black">{conflictPopup.shiftName}</span>{' '}
+                  shift on this date.
+                  <br /><br />
+                  Please choose a different colleague.
+                </p>
+
+                <button
+                  type="button"
+                  onClick={onDismissConflict}
+                  className="w-full py-4 bg-rose-600 hover:bg-rose-500 active:scale-95 text-white rounded-2xl text-[10px] font-black uppercase tracking-[0.3em] transition-all shadow-lg shadow-rose-950/30"
                 >
-                  <option value="">{availableDates.length > 0 ? "Choose Date..." : "No shifts assigned yet"}</option>
-                  {availableDates.map((date: any) => {
-                    const assignment = assignments.find((a: any) => a.date === date);
-                    const tpl = templates.find((t: any) => t.id === assignment?.shiftId);
-                    return (
-                      <option key={date} value={date}>
-                        {format(new Date(date), 'EEEE, MMM d')} ({tpl?.name || 'Assigned'})
-                      </option>
-                    );
-                  })}
-                </select>
-                {form.assignmentId && (
-                  <p className="text-[10px] text-indigo-400 font-bold ml-2 animate-pulse uppercase tracking-widest">
-                    Primary Shift Detected for selection
-                  </p>
-                )}
+                  Choose Different Personnel
+                </button>
+              </motion.div>
+            </div>
+          </>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {isOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-6">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={onClose}
+              className="absolute inset-0 bg-slate-950/80 backdrop-blur-sm"
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.9, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9, y: 20 }}
+              className="w-full max-w-md glass-morphism rounded-[2.5rem] p-10 relative overflow-hidden"
+            >
+              <button
+                type="button"
+                onClick={onClose}
+                className="absolute top-8 right-8 text-slate-500 hover:text-white transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+
+              <div className="mb-8">
+                <h3 className="text-3xl font-black tracking-tighter text-white uppercase mb-2">
+                  Request <span className="text-indigo-400">Mutation</span>
+                </h3>
+                <p className="text-[10px] font-mono text-slate-500 uppercase tracking-widest">
+                  Protocol Reassignment Request
+                </p>
               </div>
 
-              <div className="space-y-2">
-                <label className="text-[9px] font-black text-slate-500 uppercase tracking-[0.3em] ml-2">Select Target Colleague</label>
-                <div className="relative">
-                  <UserCircle className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-indigo-400" />
+              {error && (
+                <motion.div
+                  initial={{ opacity: 0, x: -10 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  className="mb-8 p-4 bg-rose-500/10 border border-rose-500/20 rounded-2xl flex gap-3 text-rose-500 shadow-lg shadow-rose-500/5 items-center"
+                >
+                  <AlertTriangle className="w-5 h-5 flex-shrink-0" />
+                  <p className="text-[10px] font-black uppercase tracking-wider leading-relaxed">{error}</p>
+                </motion.div>
+              )}
+
+              <form onSubmit={onSubmit} className="space-y-6">
+                <div className="space-y-2">
+                  <label className="text-[9px] font-black text-slate-500 uppercase tracking-[0.3em] ml-2">
+                    Select Date to Swap
+                  </label>
                   <select
                     required
-                    className="w-full bg-slate-900/50 border border-white/10 rounded-2xl py-4 pl-12 pr-4 text-xs font-bold text-white uppercase tracking-widest focus:border-indigo-500/50 focus:outline-none transition-colors appearance-none"
-                    value={form.toUserId}
-                    onChange={e => setForm({ ...form, toUserId: e.target.value })}
+                    className="w-full bg-slate-900/50 border border-white/10 rounded-2xl py-4 px-6 text-xs font-bold text-white uppercase tracking-widest focus:border-indigo-500/50 focus:outline-none transition-colors appearance-none"
+                    value={form.date}
+                    onChange={e => onDateChange(e.target.value)}
                   >
-                    <option value="">Choose Personnel...</option>
-                    {colleagues.map((c: any) => (
-                      <option key={c.id} value={c.id}>{c.name}</option>
-                    ))}
+                    <option value="">{availableDates.length > 0 ? "Choose Date..." : "No shifts assigned yet"}</option>
+                    {availableDates.map((date: any) => {
+                      const assignment = assignments.find((a: any) => a.date === date);
+                      const tpl = templates.find((t: any) => t.id === assignment?.shiftId);
+                      return (
+                        <option key={date} value={date}>
+                          {format(new Date(date), 'EEEE, MMM d')} ({tpl?.name || 'Assigned'})
+                        </option>
+                      );
+                    })}
                   </select>
+                  {form.assignmentId && (
+                    <p className="text-[10px] text-indigo-400 font-bold ml-2 animate-pulse uppercase tracking-widest">
+                      Primary Shift Detected for selection
+                    </p>
+                  )}
                 </div>
-              </div>
 
-              <div className="space-y-2">
-                <label className="text-[9px] font-black text-slate-500 uppercase tracking-[0.3em] ml-2">Justification</label>
-                <textarea
-                  required
-                  placeholder="Reason for temporal shift..."
-                  className="w-full bg-slate-900/50 border border-white/10 rounded-2xl py-4 px-6 text-xs font-bold text-white tracking-widest focus:border-indigo-500/50 focus:outline-none transition-colors min-h-[100px]"
-                  value={form.reason}
-                  onChange={e => setForm({ ...form, reason: e.target.value })}
-                />
-              </div>
+                <div className="space-y-2">
+                  <label className="text-[9px] font-black text-slate-500 uppercase tracking-[0.3em] ml-2">
+                    Select Target Colleague
+                  </label>
+                  <div className="relative">
+                    <UserCircle className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-indigo-400" />
+                    <select
+                      required
+                      className="w-full bg-slate-900/50 border border-white/10 rounded-2xl py-4 pl-12 pr-4 text-xs font-bold text-white uppercase tracking-widest focus:border-indigo-500/50 focus:outline-none transition-colors appearance-none"
+                      value={form.toUserId}
+                      onChange={e => setForm({ ...form, toUserId: e.target.value })}
+                    >
+                      <option value="">Choose Personnel...</option>
+                      {colleagues.map((c: any) => (
+                        <option key={c.id} value={c.id}>{c.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
 
-              <button
-                type="submit"
-                disabled={submitting || !form.assignmentId || !form.toUserId}
-                className="w-full bg-indigo-600 hover:bg-indigo-500 text-white rounded-2xl py-5 text-sm font-black uppercase tracking-[0.3em] transition-all transform active:scale-95 shadow-xl shadow-indigo-950/20 disabled:opacity-50 flex items-center justify-center gap-3"
-              >
-                {submitting ? (
-                  <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                ) : (
-                  <>
-                    <Send className="w-4 h-4" />
-                    Transmit Request
-                  </>
-                )}
-              </button>
-            </form>
-          </motion.div>
-        </div>
-      )}
-    </AnimatePresence>
+                <div className="space-y-2">
+                  <label className="text-[9px] font-black text-slate-500 uppercase tracking-[0.3em] ml-2">
+                    Justification
+                  </label>
+                  <textarea
+                    required
+                    placeholder="Reason for temporal shift..."
+                    className="w-full bg-slate-900/50 border border-white/10 rounded-2xl py-4 px-6 text-xs font-bold text-white tracking-widest focus:border-indigo-500/50 focus:outline-none transition-colors min-h-[100px]"
+                    value={form.reason}
+                    onChange={e => setForm({ ...form, reason: e.target.value })}
+                  />
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={submitting || !form.assignmentId || !form.toUserId}
+                  className="w-full bg-indigo-600 hover:bg-indigo-500 text-white rounded-2xl py-5 text-sm font-black uppercase tracking-[0.3em] transition-all transform active:scale-95 shadow-xl shadow-indigo-950/20 disabled:opacity-50 flex items-center justify-center gap-3"
+                >
+                  {submitting ? (
+                    <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                  ) : (
+                    <>
+                      <Send className="w-4 h-4" />
+                      Transmit Request
+                    </>
+                  )}
+                </button>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+    </>
   );
 }

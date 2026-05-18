@@ -178,14 +178,16 @@ app.post("/api/swaps", (req, res) => {
     return res.status(400).json({ error: 'Invalid assignment: does not belong to requesting user.' });
   }
 
-  // 2. Block if target is on the same shift AND same day
-  const sameShiftConflict = assignments.find(a =>
+  // 2. Strict conflict check: Reject if target is busy with ANY assignment on this calendar date
+  const timelineConflict = assignments.find(a =>
     String(a.userId) === String(toUserId) &&
-    a.date === requesterAssignment.date &&
-    a.shiftId === requesterAssignment.shiftId
+    a.date === requesterAssignment.date
   );
 
-  if (sameShiftConflict) {
+  if (timelineConflict) {
+    const conflictShift = shiftTemplates.find(t => t.id === timelineConflict.shiftId);
+    const conflictShiftName = conflictShift ? conflictShift.name : 'another';
+
     const auditEntry = {
       id: Math.random().toString(36).substr(2, 9),
       fromUserId,
@@ -193,12 +195,15 @@ app.post("/api/swaps", (req, res) => {
       assignmentId,
       date: requesterAssignment.date,
       shiftId: requesterAssignment.shiftId,
-      reason: 'Backend: same shift and date conflict',
+      reason: `Backend: schedule conflict (Target already assigned to ${conflictShiftName} shift)`,
       rejectedAt: new Date().toISOString()
     };
     rejectedSwapAudit.push(auditEntry);
-    console.warn(`[SWAP REJECTED - BACKEND] fromUser=${fromUserId} toUser=${toUserId} date=${requesterAssignment.date} shift=${requesterAssignment.shiftId}`);
-    return res.status(409).json({ error: 'Swap not allowed: Both employees are already assigned to the same shift.' });
+    console.warn(`[SWAP REJECTED - BACKEND] Conflict on date=${requesterAssignment.date}. fromUser=${fromUserId} targeting toUser=${toUserId} (working ${conflictShiftName} shift)`);
+    
+    return res.status(409).json({ 
+      error: `Swap rejected: Selected employee is already working the ${conflictShiftName} shift on this date.` 
+    });
   }
 
   // --- End validation ---
