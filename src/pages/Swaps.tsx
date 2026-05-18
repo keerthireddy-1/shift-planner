@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { format } from 'date-fns';
 import { useAuth } from '../hooks/useAuth';
 import { SwapRequest, User, ShiftTemplate, Assignment } from '../types';
-import { Repeat, Check, X, Clock, AlertTriangle, Plus, Loader2, Send, UserCircle } from 'lucide-react';
+import { Repeat, Check, X, Clock, AlertTriangle, Plus, Loader2, Send, UserCircle, ShieldCheck } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -61,33 +61,49 @@ export default function Swaps() {
   }, [user]);
 
   const filteredSwaps = swaps.filter(swap => {
-    const isPending = swap.status === 'pending';
     const isInvolved = swap.fromUserId === user?.id || swap.toUserId === user?.id;
-    
+
     if (activeTab === 'active') {
-      if (user?.role === 'admin') return isPending;
-      // Per instructions: show only swaps directed TO this user for active action
-      // But we also allow them to see what they SENT in active if we want? 
-      // The user said "the swap should only be displayed to the person to whom request is raised"
-      // I will strictly follow that for the 'active' list but maybe history is where they see results.
-      return isPending && swap.toUserId === user?.id;
+      if (user?.role === 'admin') {
+        // Admin sees swaps that peer has accepted, waiting for admin approval
+        return swap.status === 'peer_accepted';
+      }
+      // Peer sees pending swaps directed to them
+      // Requester sees their own pending/peer_accepted swaps
+      if (swap.toUserId === user?.id) return swap.status === 'pending';
+      if (swap.fromUserId === user?.id) return swap.status === 'pending' || swap.status === 'peer_accepted';
+      return false;
     } else {
-      const isHistory = swap.status !== 'pending';
-      if (user?.role === 'admin') return isHistory;
-      return isHistory && isInvolved;
+      // History: fully resolved swaps
+      const isResolved = swap.status === 'approved' || swap.status === 'rejected';
+      if (user?.role === 'admin') return isResolved;
+      return isResolved && isInvolved;
     }
   });
 
-  const handleAction = async (id: string, status: 'approved' | 'rejected') => {
+  // Peer action: accept/decline
+  const handlePeerAction = async (id: string, accepted: boolean) => {
+    try {
+      const res = await fetch(`/api/swaps/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: accepted ? 'peer_accepted' : 'rejected' })
+      });
+      if (res.ok) fetchData();
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  // Admin action: final approve/reject
+  const handleAdminAction = async (id: string, status: 'approved' | 'rejected') => {
     try {
       const res = await fetch(`/api/swaps/${id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status })
       });
-      if (res.ok) {
-        fetchData();
-      }
+      if (res.ok) fetchData();
     } catch (e) {
       console.error(e);
     }
@@ -98,7 +114,6 @@ export default function Swaps() {
     setError(null);
     if (!swapForm.assignmentId || !swapForm.toUserId || !swapForm.date) return;
 
-    // Conflict Check: Is the target user already working the SAME shift slot?
     const myAssignment = myAssignments.find(a => a.id === swapForm.assignmentId);
     if (!myAssignment) return;
 
@@ -201,7 +216,10 @@ export default function Swaps() {
         ) : filteredSwaps.map(swap => {
           const fromUser = users.find(u => u.id === swap.fromUserId);
           const toUser = users.find(u => u.id === swap.toUserId);
-          
+          const isPeerPending = swap.status === 'pending' && swap.toUserId === user?.id;
+          const isAwaitingAdmin = swap.status === 'peer_accepted' && user?.role === 'admin';
+          const isRequesterWaiting = swap.fromUserId === user?.id && (swap.status === 'pending' || swap.status === 'peer_accepted');
+
           return (
             <motion.div 
               key={swap.id} 
@@ -230,38 +248,72 @@ export default function Swaps() {
                      <AlertTriangle className="w-3 h-3 text-amber-500/50" />
                      <p className="text-[10px] text-slate-400 font-medium italic tracking-wider">"{swap.reason}"</p>
                   </div>
+                  {/* Stage indicator */}
+                  {swap.status === 'peer_accepted' && (
+                    <div className="mt-3 flex items-center gap-2">
+                      <Check className="w-3 h-3 text-emerald-500" />
+                      <span className="text-[10px] font-black text-emerald-500 uppercase tracking-widest">Peer Accepted · Awaiting Admin Approval</span>
+                    </div>
+                  )}
                 </div>
               </div>
 
               <div className="flex items-center gap-6">
-                {swap.status === 'pending' ? (
-                  (user?.role === 'admin' || user?.id === swap.toUserId) ? (
-                    <div className="flex gap-4">
-                      <button 
-                        onClick={() => handleAction(swap.id, 'approved')}
-                        className="w-12 h-12 bg-emerald-500/10 text-emerald-500 rounded-2xl border border-emerald-500/20 hover:bg-emerald-500 hover:text-white transition-all flex items-center justify-center shadow-lg shadow-emerald-500/10"
-                        title={user?.id === swap.toUserId ? "Accept Swap" : "Approve Swap"}
-                      >
-                        <Check className="w-6 h-6" />
-                      </button>
-                      <button 
-                         onClick={() => handleAction(swap.id, 'rejected')}
-                        className="w-12 h-12 bg-rose-500/10 text-rose-500 rounded-2xl border border-rose-500/20 hover:bg-rose-500 hover:text-white transition-all flex items-center justify-center shadow-lg shadow-rose-500/10"
-                        title={user?.id === swap.toUserId ? "Decline Swap" : "Reject Swap"}
-                      >
-                        <X className="w-6 h-6" />
-                      </button>
-                    </div>
-                  ) : (
-                    <div className="px-6 py-3 bg-slate-900 border border-white/5 text-slate-400 rounded-2xl text-[10px] font-black tracking-widest uppercase flex items-center gap-3">
-                      <Clock className="w-4 h-4 animate-pulse" />
-                      Pending Validation
-                    </div>
-                  )
-                ) : (
+                {/* Peer sees Accept/Decline on pending swaps directed to them */}
+                {isPeerPending && (
+                  <div className="flex gap-4">
+                    <button 
+                      onClick={() => handlePeerAction(swap.id, true)}
+                      className="w-12 h-12 bg-emerald-500/10 text-emerald-500 rounded-2xl border border-emerald-500/20 hover:bg-emerald-500 hover:text-white transition-all flex items-center justify-center shadow-lg shadow-emerald-500/10"
+                      title="Accept Swap"
+                    >
+                      <Check className="w-6 h-6" />
+                    </button>
+                    <button 
+                      onClick={() => handlePeerAction(swap.id, false)}
+                      className="w-12 h-12 bg-rose-500/10 text-rose-500 rounded-2xl border border-rose-500/20 hover:bg-rose-500 hover:text-white transition-all flex items-center justify-center shadow-lg shadow-rose-500/10"
+                      title="Decline Swap"
+                    >
+                      <X className="w-6 h-6" />
+                    </button>
+                  </div>
+                )}
+
+                {/* Admin sees Approve/Reject only after peer has accepted */}
+                {isAwaitingAdmin && (
+                  <div className="flex gap-4">
+                    <button 
+                      onClick={() => handleAdminAction(swap.id, 'approved')}
+                      className="w-12 h-12 bg-emerald-500/10 text-emerald-500 rounded-2xl border border-emerald-500/20 hover:bg-emerald-500 hover:text-white transition-all flex items-center justify-center shadow-lg shadow-emerald-500/10"
+                      title="Approve Swap"
+                    >
+                      <ShieldCheck className="w-6 h-6" />
+                    </button>
+                    <button 
+                      onClick={() => handleAdminAction(swap.id, 'rejected')}
+                      className="w-12 h-12 bg-rose-500/10 text-rose-500 rounded-2xl border border-rose-500/20 hover:bg-rose-500 hover:text-white transition-all flex items-center justify-center shadow-lg shadow-rose-500/10"
+                      title="Reject Swap"
+                    >
+                      <X className="w-6 h-6" />
+                    </button>
+                  </div>
+                )}
+
+                {/* Requester sees waiting state */}
+                {isRequesterWaiting && (
+                  <div className="px-6 py-3 bg-slate-900 border border-white/5 text-slate-400 rounded-2xl text-[10px] font-black tracking-widest uppercase flex items-center gap-3">
+                    <Clock className="w-4 h-4 animate-pulse" />
+                    {swap.status === 'pending' ? 'Awaiting Peer' : 'Awaiting Admin'}
+                  </div>
+                )}
+
+                {/* Resolved status badge */}
+                {(swap.status === 'approved' || swap.status === 'rejected') && (
                   <div className={cn(
                     "px-8 py-3 rounded-2xl text-[10px] font-black uppercase tracking-[0.2em] border",
-                    swap.status === 'approved' ? "bg-emerald-500/10 text-emerald-500 border-emerald-500/20 shadow-emerald-500/10" : "bg-rose-500/10 text-rose-500 border-rose-500/20 shadow-rose-500/10"
+                    swap.status === 'approved' 
+                      ? "bg-emerald-500/10 text-emerald-500 border-emerald-500/20 shadow-emerald-500/10" 
+                      : "bg-rose-500/10 text-rose-500 border-rose-500/20 shadow-rose-500/10"
                   )}>
                     Protocol {swap.status}
                   </div>
@@ -305,8 +357,6 @@ function SwapModal({
   error
 }: any) {
   const colleagues = users.filter((u: any) => u.id !== currentUserId);
-  
-  // Get unique dates from user's assignments
   const availableDates = [...new Set(assignments.map((a: any) => a.date))].sort();
 
   return (
@@ -395,8 +445,8 @@ function SwapModal({
               </div>
 
               <div className="space-y-2">
-                  <label className="text-[9px] font-black text-slate-500 uppercase tracking-[0.3em] ml-2">Justification</label>
-                  <textarea
+                <label className="text-[9px] font-black text-slate-500 uppercase tracking-[0.3em] ml-2">Justification</label>
+                <textarea
                   required
                   placeholder="Reason for temporal shift..."
                   className="w-full bg-slate-900/50 border border-white/10 rounded-2xl py-4 px-6 text-xs font-bold text-white tracking-widest focus:border-indigo-500/50 focus:outline-none transition-colors min-h-[100px]"
