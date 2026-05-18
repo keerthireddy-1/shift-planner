@@ -7,15 +7,15 @@ export interface User {
   role: UserRole;
   department: string;
   maxWeeklyHours: number;
-  preferences: string[]; // Ordered: [Pref 1, Pref 2, Pref 3]
+  preferences: string[];
 }
 
 export interface ShiftTemplate {
   id: string;
   name: string;
-  startTime: string; // HH:mm
-  endTime: string;   // HH:mm
-  breakDuration: number; // minutes
+  startTime: string;
+  endTime: string;
+  breakDuration: number;
   color: string;
   department: string;
 }
@@ -24,7 +24,7 @@ export interface Assignment {
   id: string;
   userId: string;
   shiftId: string;
-  date: string; // YYYY-MM-DD
+  date: string;
   status: 'assigned' | 'swapped';
   notes?: string;
 }
@@ -35,7 +35,7 @@ export interface SwapRequest {
   toUserId: string;
   assignmentId: string;
   reason: string;
-  status: 'pending' | 'approved' | 'rejected';
+  status: 'pending' | 'peer_accepted' | 'approved' | 'rejected';
   createdAt: string;
 }
 

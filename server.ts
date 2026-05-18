@@ -19,15 +19,16 @@ let users = [
 
 let assignments: any[] = [];
 let swaps: any[] = [];
+let rejectedSwapAudit: any[] = [];
 let shiftRotationCounter: Record<string, number> = {};
 
 const indianHolidays = [
-  "2026-01-26", // Republic Day
-  "2026-05-01", // Labor Day
-  "2026-08-15", // Independence Day
-  "2026-10-02", // Gandhi Jayanti
-  "2026-12-25", // Christmas
-  "2026-05-25", // Example mock holiday
+  "2026-01-26",
+  "2026-05-01",
+  "2026-08-15",
+  "2026-10-02",
+  "2026-12-25",
+  "2026-05-25",
 ];
 
 let shiftTemplates = [
@@ -44,7 +45,7 @@ app.get("/api/health", (req, res) => {
 // Auth endpoints
 app.post("/api/auth/signup", async (req, res) => {
   const { name, email, password, role, department, preferences } = req.body;
-  
+
   if (!name || !email || !password) {
     return res.status(400).json({ error: "Missing required identity fields" });
   }
@@ -76,11 +77,11 @@ app.post("/api/auth/signup", async (req, res) => {
       preferences: preferences || ['Morning', 'Afternoon', 'Night']
     };
     users.push(user);
-    
+
     const { password: _, ...userWithoutPassword } = user;
     const token = `sm_${Math.random().toString(36).substr(2, 20)}`;
-    res.json({ 
-      message: "Identity established successfully", 
+    res.json({
+      message: "Identity established successfully",
       user: userWithoutPassword,
       token
     });
@@ -92,7 +93,7 @@ app.post("/api/auth/signup", async (req, res) => {
 app.post("/api/auth/login", async (req, res) => {
   const { email, password } = req.body;
   const user = users.find(u => u.email.toLowerCase() === email.toLowerCase());
-  
+
   if (!user) {
     return res.status(401).json({ error: "Identity not found in database" });
   }
@@ -152,10 +153,62 @@ app.get("/api/swaps", (req, res) => {
   res.json(swaps);
 });
 
-app.post("/api/swaps", (req, res) => {
-  const swap = {
+// Audit log endpoint for rejected swap attempts
+app.post("/api/swaps/rejected-audit", (req, res) => {
+  const entry = {
     id: Math.random().toString(36).substr(2, 9),
     ...req.body,
+    loggedAt: new Date().toISOString()
+  };
+  rejectedSwapAudit.push(entry);
+  console.warn(`[SWAP REJECTED] fromUser=${entry.fromUserId} toUser=${entry.toUserId} date=${entry.date} shift=${entry.shiftId} reason=${entry.reason}`);
+  res.json({ logged: true });
+});
+
+app.post("/api/swaps", (req, res) => {
+  const { fromUserId, toUserId, assignmentId, reason } = req.body;
+
+  // --- Backend validation ---
+
+  // 1. Verify the assignment exists and belongs to the requester
+  const requesterAssignment = assignments.find(
+    a => a.id === assignmentId && String(a.userId) === String(fromUserId)
+  );
+  if (!requesterAssignment) {
+    return res.status(400).json({ error: 'Invalid assignment: does not belong to requesting user.' });
+  }
+
+  // 2. Block if target is on the same shift AND same day
+  const sameShiftConflict = assignments.find(a =>
+    String(a.userId) === String(toUserId) &&
+    a.date === requesterAssignment.date &&
+    a.shiftId === requesterAssignment.shiftId
+  );
+
+  if (sameShiftConflict) {
+    const auditEntry = {
+      id: Math.random().toString(36).substr(2, 9),
+      fromUserId,
+      toUserId,
+      assignmentId,
+      date: requesterAssignment.date,
+      shiftId: requesterAssignment.shiftId,
+      reason: 'Backend: same shift and date conflict',
+      rejectedAt: new Date().toISOString()
+    };
+    rejectedSwapAudit.push(auditEntry);
+    console.warn(`[SWAP REJECTED - BACKEND] fromUser=${fromUserId} toUser=${toUserId} date=${requesterAssignment.date} shift=${requesterAssignment.shiftId}`);
+    return res.status(409).json({ error: 'Swap not allowed: Both employees are already assigned to the same shift.' });
+  }
+
+  // --- End validation ---
+
+  const swap = {
+    id: Math.random().toString(36).substr(2, 9),
+    fromUserId,
+    toUserId,
+    assignmentId,
+    reason,
     status: 'pending',
     createdAt: new Date().toISOString()
   };
@@ -169,7 +222,7 @@ app.patch("/api/swaps/:id", (req, res) => {
   const swapIndex = swaps.findIndex(s => s.id === id);
   if (swapIndex !== -1) {
     swaps[swapIndex].status = status;
-    
+
     if (status === 'approved') {
       const swap = swaps[swapIndex];
       const assignIdx = assignments.findIndex(a => a.id === swap.assignmentId);
@@ -179,19 +232,14 @@ app.patch("/api/swaps/:id", (req, res) => {
         const toUserId = swap.toUserId;
         const date = originalAssignment.date;
 
-        // Check if the recipient has a shift on the same day that could be exchanged
-        // (Usually a swap implies trading shifts if both have one, or just taking it if one is free)
-        // We look for ANY shift the recipient has on that day to swap BACK to the sender.
         const recipientAssignIdx = assignments.findIndex(a => a.userId === toUserId && a.date === date);
-        
+
         if (recipientAssignIdx !== -1) {
-          // EXCHANGE: Swap the owners of both shifts
           assignments[assignIdx].userId = toUserId;
           assignments[recipientAssignIdx].userId = fromUserId;
           assignments[assignIdx].status = 'swapped';
           assignments[recipientAssignIdx].status = 'swapped';
         } else {
-          // MOVE: Recipient was free, they just take the shift
           assignments[assignIdx].userId = toUserId;
           assignments[assignIdx].status = 'swapped';
         }
@@ -206,7 +254,7 @@ app.patch("/api/swaps/:id", (req, res) => {
 app.post("/api/seed", (req, res) => {
   assignments = [];
   swaps = [];
-  // Clear non-hardcoded users if requested? For now, just clear all and re-add basics
+  rejectedSwapAudit = [];
   users = [
     { id: '1', name: 'Sarah Miller', email: 'sarah@shiftmaster.io', password: bcrypt.hashSync('password123', 10), role: 'admin', department: 'Operations', maxWeeklyHours: 40, preferences: ['Morning', 'Afternoon', 'Night'] },
     { id: '2', name: 'Marcus Chen', email: 'marcus@shiftmaster.io', password: bcrypt.hashSync('password123', 10), role: 'employee', department: 'Operations', maxWeeklyHours: 35, preferences: ['Morning', 'Afternoon', 'Night'] },
@@ -220,11 +268,11 @@ app.post("/api/generate-roster", (req, res) => {
   try {
     const { startDate, department } = req.body;
     let rosterEmployees = users.filter(u => u.role === 'employee');
-    
+
     if (department) {
       rosterEmployees = rosterEmployees.filter(u => u.department === department);
     }
-    
+
     if (rosterEmployees.length === 0) return res.json([]);
 
     const startObj = new Date(startDate);
@@ -234,7 +282,6 @@ app.post("/api/generate-roster", (req, res) => {
     const endDateStr = endObj.toISOString().split('T')[0];
     const employeeIds = rosterEmployees.map(e => e.id);
 
-    // Clear existing for range
     assignments = assignments.filter(a => {
       const isDateInRange = a.date >= startDateStr && a.date < endDateStr;
       const isEmployeeIncluded = employeeIds.includes(a.userId);
@@ -243,9 +290,6 @@ app.post("/api/generate-roster", (req, res) => {
 
     const start = new Date(startDate);
     const generated: any[] = [];
-    
-    // Track weekly hours per employee
-    // we use a map where key is userId_weekIndex
     const weeklyHoursTrack: Record<string, number> = {};
 
     for (let i = 0; i < 14; i++) {
@@ -263,15 +307,14 @@ app.post("/api/generate-roster", (req, res) => {
       shiftTemplates.forEach(t => shiftAssignments[t.id] = []);
 
       const unassignedEmployees = [...rosterEmployees];
-      
-      // Pass 1: Preferences
+
       shiftTemplates.forEach(template => {
         const interestedEmps = unassignedEmployees.filter(e => e.preferences && e.preferences[0] === template.name);
         while (interestedEmps.length > 0 && shiftAssignments[template.id].length < targetPerShift) {
           const emp = interestedEmps.shift()!;
           const rotationKey = `${emp.id}_${weekIndex}`;
           const currentHours = weeklyHoursTrack[rotationKey] || 0;
-          
+
           if (currentHours + 8 <= (emp.maxWeeklyHours || 40)) {
             shiftAssignments[template.id].push(emp.id);
             weeklyHoursTrack[rotationKey] = currentHours + 8;
@@ -281,7 +324,6 @@ app.post("/api/generate-roster", (req, res) => {
         }
       });
 
-      // Pass 2: Round Robin
       shiftTemplates.forEach((template, tIdx) => {
         const currentTarget = targetPerShift + (tIdx < remainder ? 1 : 0);
         let attempts = 0;
@@ -292,7 +334,7 @@ app.post("/api/generate-roster", (req, res) => {
           const currentCounter = shiftRotationCounter[rotationKeyGlobal] || 0;
           const empIndex = currentCounter % unassignedEmployees.length;
           const emp = unassignedEmployees[empIndex];
-          
+
           const weekKey = `${emp.id}_${weekIndex}`;
           const currentHours = weeklyHoursTrack[weekKey] || 0;
 
@@ -301,7 +343,6 @@ app.post("/api/generate-roster", (req, res) => {
             weeklyHoursTrack[weekKey] = currentHours + 8;
             unassignedEmployees.splice(empIndex, 1);
           } else {
-            // Employee hit max hours, skip for this day
             attempts++;
           }
           shiftRotationCounter[rotationKeyGlobal] = currentCounter + 1;

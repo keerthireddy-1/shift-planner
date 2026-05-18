@@ -18,11 +18,12 @@ export default function Swaps() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [swapForm, setSwapForm] = useState({ 
-    assignmentId: '', 
+  const [conflictPopup, setConflictPopup] = useState<{ visible: boolean; shiftName: string }>({ visible: false, shiftName: '' });
+  const [swapForm, setSwapForm] = useState({
+    assignmentId: '',
     date: '',
-    toUserId: '', 
-    reason: '' 
+    toUserId: '',
+    reason: ''
   });
 
   const handleDateChange = (date: string) => {
@@ -40,7 +41,7 @@ export default function Swaps() {
         fetch(`/api/assignments?department=${user?.department}`).then(r => r.json())
       ]);
       const sortedSwaps = swapRes.sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-      
+
       setSwaps(sortedSwaps);
       setUsers(userRes);
       setTemplates(tplRes);
@@ -65,23 +66,18 @@ export default function Swaps() {
 
     if (activeTab === 'active') {
       if (user?.role === 'admin') {
-        // Admin sees swaps that peer has accepted, waiting for admin approval
         return swap.status === 'peer_accepted';
       }
-      // Peer sees pending swaps directed to them
-      // Requester sees their own pending/peer_accepted swaps
       if (swap.toUserId === user?.id) return swap.status === 'pending';
       if (swap.fromUserId === user?.id) return swap.status === 'pending' || swap.status === 'peer_accepted';
       return false;
     } else {
-      // History: fully resolved swaps
       const isResolved = swap.status === 'approved' || swap.status === 'rejected';
       if (user?.role === 'admin') return isResolved;
       return isResolved && isInvolved;
     }
   });
 
-  // Peer action: accept/decline
   const handlePeerAction = async (id: string, accepted: boolean) => {
     try {
       const res = await fetch(`/api/swaps/${id}`, {
@@ -95,7 +91,6 @@ export default function Swaps() {
     }
   };
 
-  // Admin action: final approve/reject
   const handleAdminAction = async (id: string, status: 'approved' | 'rejected') => {
     try {
       const res = await fetch(`/api/swaps/${id}`, {
@@ -117,15 +112,33 @@ export default function Swaps() {
     const myAssignment = myAssignments.find(a => a.id === swapForm.assignmentId);
     if (!myAssignment) return;
 
-    const conflict = allAssignments.find(a => 
-      String(a.userId) === String(swapForm.toUserId) && 
-      a.date === swapForm.date &&
-      a.shiftId === myAssignment.shiftId
+    const myAssignmentShiftId = myAssignment.shiftId;
+    const myAssignmentDate = myAssignment.date;
+
+    const conflict = allAssignments.find(a =>
+      String(a.userId) === String(swapForm.toUserId) &&
+      a.date === myAssignmentDate &&
+      a.shiftId === myAssignmentShiftId
     );
 
     if (conflict) {
-      const tpl = templates.find(t => t.id === conflict.shiftId);
-      setError(`Slot Occupied: Target colleague is already assigned to the ${tpl?.name || 'same'} shift slot.`);
+      // Fire-and-forget audit log
+      fetch('/api/swaps/rejected-audit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fromUserId: user?.id,
+          toUserId: swapForm.toUserId,
+          assignmentId: swapForm.assignmentId,
+          date: myAssignmentDate,
+          shiftId: myAssignmentShiftId,
+          reason: 'Frontend: same shift and date conflict',
+          rejectedAt: new Date().toISOString()
+        })
+      }).catch(console.error);
+
+      const shiftName = templates.find(t => t.id === myAssignmentShiftId)?.name || 'same';
+      setConflictPopup({ visible: true, shiftName });
       return;
     }
 
@@ -141,13 +154,25 @@ export default function Swaps() {
           reason: swapForm.reason
         })
       });
-      if (res.ok) {
-        setIsModalOpen(false);
-        setSwapForm({ assignmentId: '', date: '', toUserId: '', reason: '' });
-        fetchData();
+
+      if (!res.ok) {
+        const body = await res.json();
+        // Backend also returned a conflict — show the popup too
+        if (res.status === 409) {
+          const shiftName = templates.find(t => t.id === myAssignmentShiftId)?.name || 'same';
+          setConflictPopup({ visible: true, shiftName });
+        } else {
+          setError(body.error || 'Failed to submit swap request.');
+        }
+        return;
       }
+
+      setIsModalOpen(false);
+      setSwapForm({ assignmentId: '', date: '', toUserId: '', reason: '' });
+      fetchData();
     } catch (e) {
       console.error(e);
+      setError('Network error. Please try again.');
     } finally {
       setSubmitting(false);
     }
@@ -160,7 +185,7 @@ export default function Swaps() {
   );
 
   return (
-    <motion.div 
+    <motion.div
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       className="max-w-4xl mx-auto space-y-10"
@@ -172,7 +197,7 @@ export default function Swaps() {
         </div>
         <div className="flex gap-4">
           <div className="flex bg-slate-900/50 p-1.5 rounded-2xl border border-white/5">
-            <button 
+            <button
               onClick={() => setActiveTab('active')}
               className={cn(
                 "px-6 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all",
@@ -181,7 +206,7 @@ export default function Swaps() {
             >
               Action Center
             </button>
-            <button 
+            <button
               onClick={() => setActiveTab('history')}
               className={cn(
                 "px-6 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all",
@@ -192,7 +217,7 @@ export default function Swaps() {
             </button>
           </div>
           {user?.role === 'employee' && (
-            <button 
+            <button
               onClick={() => setIsModalOpen(true)}
               className="px-6 py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-2xl text-[10px] font-black tracking-widest uppercase flex items-center gap-3 transition-all shadow-lg shadow-indigo-950/40"
             >
@@ -221,8 +246,8 @@ export default function Swaps() {
           const isRequesterWaiting = swap.fromUserId === user?.id && (swap.status === 'pending' || swap.status === 'peer_accepted');
 
           return (
-            <motion.div 
-              key={swap.id} 
+            <motion.div
+              key={swap.id}
               whileHover={{ scale: 1.01 }}
               className="glass-morphism rounded-[2rem] p-8 flex items-center justify-between group transition-all"
             >
@@ -234,8 +259,8 @@ export default function Swaps() {
                   <div className="flex items-center gap-4 mb-2">
                     <span className="text-lg font-black text-white tracking-tight uppercase">{fromUser?.name}</span>
                     <div className="flex gap-1">
-                       <div className="w-1.5 h-1.5 bg-slate-700 rounded-full" />
-                       <div className="w-1.5 h-1.5 bg-slate-700 rounded-full" />
+                      <div className="w-1.5 h-1.5 bg-slate-700 rounded-full" />
+                      <div className="w-1.5 h-1.5 bg-slate-700 rounded-full" />
                     </div>
                     <span className="text-lg font-black text-slate-500 tracking-tight uppercase">{toUser?.name}</span>
                   </div>
@@ -245,10 +270,9 @@ export default function Swaps() {
                     <span>{format(new Date(swap.createdAt), 'MMM d, HH:mm')}</span>
                   </div>
                   <div className="mt-4 flex items-center gap-2">
-                     <AlertTriangle className="w-3 h-3 text-amber-500/50" />
-                     <p className="text-[10px] text-slate-400 font-medium italic tracking-wider">"{swap.reason}"</p>
+                    <AlertTriangle className="w-3 h-3 text-amber-500/50" />
+                    <p className="text-[10px] text-slate-400 font-medium italic tracking-wider">"{swap.reason}"</p>
                   </div>
-                  {/* Stage indicator */}
                   {swap.status === 'peer_accepted' && (
                     <div className="mt-3 flex items-center gap-2">
                       <Check className="w-3 h-3 text-emerald-500" />
@@ -259,17 +283,16 @@ export default function Swaps() {
               </div>
 
               <div className="flex items-center gap-6">
-                {/* Peer sees Accept/Decline on pending swaps directed to them */}
                 {isPeerPending && (
                   <div className="flex gap-4">
-                    <button 
+                    <button
                       onClick={() => handlePeerAction(swap.id, true)}
                       className="w-12 h-12 bg-emerald-500/10 text-emerald-500 rounded-2xl border border-emerald-500/20 hover:bg-emerald-500 hover:text-white transition-all flex items-center justify-center shadow-lg shadow-emerald-500/10"
                       title="Accept Swap"
                     >
                       <Check className="w-6 h-6" />
                     </button>
-                    <button 
+                    <button
                       onClick={() => handlePeerAction(swap.id, false)}
                       className="w-12 h-12 bg-rose-500/10 text-rose-500 rounded-2xl border border-rose-500/20 hover:bg-rose-500 hover:text-white transition-all flex items-center justify-center shadow-lg shadow-rose-500/10"
                       title="Decline Swap"
@@ -279,17 +302,16 @@ export default function Swaps() {
                   </div>
                 )}
 
-                {/* Admin sees Approve/Reject only after peer has accepted */}
                 {isAwaitingAdmin && (
                   <div className="flex gap-4">
-                    <button 
+                    <button
                       onClick={() => handleAdminAction(swap.id, 'approved')}
                       className="w-12 h-12 bg-emerald-500/10 text-emerald-500 rounded-2xl border border-emerald-500/20 hover:bg-emerald-500 hover:text-white transition-all flex items-center justify-center shadow-lg shadow-emerald-500/10"
                       title="Approve Swap"
                     >
                       <ShieldCheck className="w-6 h-6" />
                     </button>
-                    <button 
+                    <button
                       onClick={() => handleAdminAction(swap.id, 'rejected')}
                       className="w-12 h-12 bg-rose-500/10 text-rose-500 rounded-2xl border border-rose-500/20 hover:bg-rose-500 hover:text-white transition-all flex items-center justify-center shadow-lg shadow-rose-500/10"
                       title="Reject Swap"
@@ -299,7 +321,6 @@ export default function Swaps() {
                   </div>
                 )}
 
-                {/* Requester sees waiting state */}
                 {isRequesterWaiting && (
                   <div className="px-6 py-3 bg-slate-900 border border-white/5 text-slate-400 rounded-2xl text-[10px] font-black tracking-widest uppercase flex items-center gap-3">
                     <Clock className="w-4 h-4 animate-pulse" />
@@ -307,12 +328,11 @@ export default function Swaps() {
                   </div>
                 )}
 
-                {/* Resolved status badge */}
                 {(swap.status === 'approved' || swap.status === 'rejected') && (
                   <div className={cn(
                     "px-8 py-3 rounded-2xl text-[10px] font-black uppercase tracking-[0.2em] border",
-                    swap.status === 'approved' 
-                      ? "bg-emerald-500/10 text-emerald-500 border-emerald-500/20 shadow-emerald-500/10" 
+                    swap.status === 'approved'
+                      ? "bg-emerald-500/10 text-emerald-500 border-emerald-500/20 shadow-emerald-500/10"
                       : "bg-rose-500/10 text-rose-500 border-rose-500/20 shadow-rose-500/10"
                   )}>
                     Protocol {swap.status}
@@ -324,7 +344,56 @@ export default function Swaps() {
         })}
       </div>
 
-      <SwapModal 
+      {/* Conflict popup — renders above the swap modal */}
+      <AnimatePresence>
+        {conflictPopup.visible && (
+          <div className="fixed inset-0 z-[60] flex items-center justify-center p-6">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="absolute inset-0 bg-slate-950/60 backdrop-blur-sm"
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.85, y: 24 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.85, y: 24 }}
+              transition={{ type: 'spring', stiffness: 320, damping: 28 }}
+              className="relative w-full max-w-sm bg-slate-900 border border-rose-500/30 rounded-[2rem] p-10 shadow-2xl shadow-rose-950/40 text-center overflow-hidden"
+            >
+              {/* Glow accent */}
+              <div className="absolute -top-10 left-1/2 -translate-x-1/2 w-40 h-40 bg-rose-500/10 rounded-full blur-3xl pointer-events-none" />
+
+              <div className="w-16 h-16 mx-auto mb-6 rounded-3xl bg-rose-500/10 border border-rose-500/20 flex items-center justify-center shadow-lg shadow-rose-500/10">
+                <AlertTriangle className="w-8 h-8 text-rose-500" />
+              </div>
+
+              <h3 className="text-xl font-black text-white uppercase tracking-tight mb-2">
+                Conflict <span className="text-rose-500">Detected</span>
+              </h3>
+
+              <p className="text-[10px] font-mono text-slate-400 uppercase tracking-[0.25em] mb-6 leading-relaxed">
+                Selected personnel is already assigned to the{' '}
+                <span className="text-rose-400 font-black">{conflictPopup.shiftName}</span>{' '}
+                shift on this date. Choose a different colleague.
+              </p>
+
+              <button
+                onClick={() => {
+                  setConflictPopup({ visible: false, shiftName: '' });
+                  // Reset only the colleague field so they can pick someone else
+                  setSwapForm(f => ({ ...f, toUserId: '' }));
+                }}
+                className="w-full py-4 bg-rose-600 hover:bg-rose-500 text-white rounded-2xl text-[10px] font-black uppercase tracking-[0.3em] transition-all active:scale-95 shadow-lg shadow-rose-950/30"
+              >
+                Choose Different Personnel
+              </button>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      <SwapModal
         isOpen={isModalOpen}
         onClose={() => setIsModalOpen(false)}
         onSubmit={handleSwapSubmit}
@@ -342,16 +411,16 @@ export default function Swaps() {
   );
 }
 
-function SwapModal({ 
-  isOpen, 
-  onClose, 
-  onSubmit, 
-  submitting, 
-  form, 
+function SwapModal({
+  isOpen,
+  onClose,
+  onSubmit,
+  submitting,
+  form,
   onDateChange,
-  setForm, 
-  assignments, 
-  users, 
+  setForm,
+  assignments,
+  users,
   currentUserId,
   templates,
   error
@@ -363,20 +432,20 @@ function SwapModal({
     <AnimatePresence>
       {isOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-6">
-          <motion.div 
+          <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             onClick={onClose}
             className="absolute inset-0 bg-slate-950/80 backdrop-blur-sm"
           />
-          <motion.div 
+          <motion.div
             initial={{ opacity: 0, scale: 0.9, y: 20 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.9, y: 20 }}
             className="w-full max-w-md glass-morphism rounded-[2.5rem] p-10 relative overflow-hidden"
           >
-            <button 
+            <button
               onClick={onClose}
               className="absolute top-8 right-8 text-slate-500 hover:text-white transition-colors"
             >
@@ -389,7 +458,7 @@ function SwapModal({
             </div>
 
             {error && (
-              <motion.div 
+              <motion.div
                 initial={{ opacity: 0, x: -10 }}
                 animate={{ opacity: 1, x: 0 }}
                 className="mb-8 p-4 bg-rose-500/10 border border-rose-500/20 rounded-2xl flex gap-3 text-rose-500 shadow-lg shadow-rose-500/5 items-center"
